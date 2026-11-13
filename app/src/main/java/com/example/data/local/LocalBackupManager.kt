@@ -26,6 +26,14 @@ data class RestoreSummary(
     val cacheRestored: Int
 )
 
+data class RestoredAppearanceSettings(
+    val autoBlockEnabled: Boolean,
+    val spamThreshold: Int,
+    val blockHiddenNumbers: Boolean,
+    val contactNameColorArgb: Long?,
+    val favoriteOverrides: Map<Long, Boolean>
+)
+
 class LocalBackupManager(
     private val context: Context,
     private val dao: SpamcallerDao
@@ -38,7 +46,9 @@ class LocalBackupManager(
     suspend fun createBackupPayloadJson(
         autoBlockEnabled: Boolean,
         spamThreshold: Int,
-        blockHiddenNumbers: Boolean
+        blockHiddenNumbers: Boolean,
+        contactNameColorArgb: Long = 0L,
+        favoriteOverrides: Map<Long, Boolean> = emptyMap()
     ): Pair<String, Triple<Int, Int, Int>> = withContext(Dispatchers.IO) {
         val blocked = dao.getAllBlockedNumbersOnce()
         val sources = dao.getAllSpamSourcesOnce()
@@ -46,12 +56,16 @@ class LocalBackupManager(
 
         val root = JSONObject().apply {
             put("app", "Spamcaller")
-            put("schemaVersion", 1)
+            put("schemaVersion", 2)
             put("exportedAt", System.currentTimeMillis())
             put("settings", JSONObject().apply {
                 put("autoBlockEnabled", autoBlockEnabled)
                 put("spamThreshold", spamThreshold)
                 put("blockHiddenNumbers", blockHiddenNumbers)
+                put("contactNameColorArgb", contactNameColorArgb)
+                put("favoriteOverrides", JSONObject().apply {
+                    favoriteOverrides.forEach { (id, fav) -> put(id.toString(), fav) }
+                })
             })
             put("blockedNumbers", JSONArray().apply {
                 blocked.forEach { b ->
@@ -99,14 +113,18 @@ class LocalBackupManager(
     suspend fun saveBackupOnPhone(
         autoBlockEnabled: Boolean,
         spamThreshold: Int,
-        blockHiddenNumbers: Boolean
+        blockHiddenNumbers: Boolean,
+        contactNameColorArgb: Long = 0L,
+        favoriteOverrides: Map<Long, Boolean> = emptyMap()
     ): PhoneBackupSummary = withContext(Dispatchers.IO) {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ITALY).format(Date())
         val fileName = "spamcaller_backup_$stamp.json"
         val (jsonString, counts) = createBackupPayloadJson(
             autoBlockEnabled,
             spamThreshold,
-            blockHiddenNumbers
+            blockHiddenNumbers,
+            contactNameColorArgb,
+            favoriteOverrides
         )
 
         val file = File(backupDir, fileName)
@@ -136,12 +154,16 @@ class LocalBackupManager(
         uri: Uri,
         autoBlockEnabled: Boolean,
         spamThreshold: Int,
-        blockHiddenNumbers: Boolean
+        blockHiddenNumbers: Boolean,
+        contactNameColorArgb: Long = 0L,
+        favoriteOverrides: Map<Long, Boolean> = emptyMap()
     ): PhoneBackupSummary = withContext(Dispatchers.IO) {
         val (jsonString, counts) = createBackupPayloadJson(
             autoBlockEnabled,
             spamThreshold,
-            blockHiddenNumbers
+            blockHiddenNumbers,
+            contactNameColorArgb,
+            favoriteOverrides
         )
         val bytes = jsonString.toByteArray(Charsets.UTF_8)
         context.contentResolver.openOutputStream(uri)?.use { out ->
@@ -170,14 +192,14 @@ class LocalBackupManager(
         )
     }
 
-    suspend fun restoreFromLocalFile(filePath: String): Pair<RestoreSummary, Triple<Boolean, Int, Boolean>?> =
+    suspend fun restoreFromLocalFile(filePath: String): Pair<RestoreSummary, RestoredAppearanceSettings?> =
         withContext(Dispatchers.IO) {
             val file = File(filePath)
             require(file.exists()) { "File backup non trovato sul telefono" }
             restoreFromJsonString(file.readText(Charsets.UTF_8))
         }
 
-    suspend fun restoreFromUri(uri: Uri): Pair<RestoreSummary, Triple<Boolean, Int, Boolean>?> =
+    suspend fun restoreFromUri(uri: Uri): Pair<RestoreSummary, RestoredAppearanceSettings?> =
         withContext(Dispatchers.IO) {
             val text = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)
                 ?.use { it.readText() }
@@ -193,7 +215,7 @@ class LocalBackupManager(
 
     private suspend fun restoreFromJsonString(
         rawJson: String
-    ): Pair<RestoreSummary, Triple<Boolean, Int, Boolean>?> {
+    ): Pair<RestoreSummary, RestoredAppearanceSettings?> {
         val root = JSONObject(rawJson)
         require(root.optString("app") == "Spamcaller" || root.has("blockedNumbers")) {
             "File JSON non compatibile con Spamcaller"
@@ -270,11 +292,28 @@ class LocalBackupManager(
         }
 
         val settingsObj = root.optJSONObject("settings")
-        val settingsTriple = if (settingsObj != null) {
-            Triple(
-                settingsObj.optBoolean("autoBlockEnabled", true),
-                settingsObj.optInt("spamThreshold", 70),
-                settingsObj.optBoolean("blockHiddenNumbers", false)
+        val restoredSettings = if (settingsObj != null) {
+            val favObj = settingsObj.optJSONObject("favoriteOverrides")
+            val favMap = buildMap {
+                if (favObj != null) {
+                    val keys = favObj.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        val id = k.toLongOrNull()
+                        if (id != null) {
+                            put(id, favObj.optBoolean(k, false))
+                        }
+                    }
+                }
+            }
+            RestoredAppearanceSettings(
+                autoBlockEnabled = settingsObj.optBoolean("autoBlockEnabled", true),
+                spamThreshold = settingsObj.optInt("spamThreshold", 70),
+                blockHiddenNumbers = settingsObj.optBoolean("blockHiddenNumbers", false),
+                contactNameColorArgb = if (settingsObj.has("contactNameColorArgb")) {
+                    settingsObj.optLong("contactNameColorArgb", 0L)
+                } else null,
+                favoriteOverrides = favMap
             )
         } else null
 
@@ -282,6 +321,6 @@ class LocalBackupManager(
             blockedRestored = blockedList.size,
             sourcesRestored = newSources.size,
             cacheRestored = cacheList.size
-        ) to settingsTriple
+        ) to restoredSettings
     }
 }

@@ -16,35 +16,29 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Event
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Notes
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,46 +47,62 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.device.DeviceContact
 import com.example.ui.components.BrandedTopHeader
+import com.example.ui.components.ContactColorPalette
 import com.example.ui.components.ContactOrCallerAvatar
 import com.example.ui.theme.ElectricAzure
 import com.example.ui.theme.LocalSpamcallerGradients
 import com.example.ui.theme.LuminousCyan
 import com.example.ui.theme.SafeEmerald
-import com.example.ui.theme.SpamCrimson
+import com.example.ui.theme.SuspectAmber
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+private enum class ContactListFilter(val label: String) {
+    ALL("Tutti"),
+    FAVORITES("Preferiti")
+}
+
 @Composable
 fun ContactsScreen(
     contacts: List<DeviceContact>,
+    favoriteContacts: List<DeviceContact>,
     googleAccounts: List<String>,
     lastSyncMillis: Long,
     isSyncing: Boolean,
     hasContactsPermission: Boolean,
+    contactNameColorArgb: Long,
     onRequestPermissions: () -> Unit,
     onSyncGoogleContacts: () -> Unit,
+    onOpenContactDetail: (DeviceContact) -> Unit,
+    onToggleFavorite: (DeviceContact) -> Unit,
     onCallNumber: (String) -> Unit,
-    onBlockNumber: (String, String, String, Int) -> Unit
+    onOpenColorSettings: () -> Unit
 ) {
     val gradients = LocalSpamcallerGradients.current
     var query by remember { mutableStateOf("") }
-    var selectedContact by remember { mutableStateOf<DeviceContact?>(null) }
+    var activeFilter by remember { mutableStateOf(ContactListFilter.ALL) }
 
-    val filtered = remember(contacts, query) {
+    val resolvedNameColor = ContactColorPalette.resolveNameColor(
+        argb = contactNameColorArgb,
+        defaultColor = MaterialTheme.colorScheme.onSurface
+    )
+
+    val filtered = remember(contacts, favoriteContacts, query, activeFilter) {
+        val base = if (activeFilter == ContactListFilter.FAVORITES) favoriteContacts else contacts
         val q = query.trim().lowercase(Locale.ITALIAN)
-        if (q.isBlank()) contacts
-        else contacts.filter { c ->
+        if (q.isBlank()) base
+        else base.filter { c ->
             c.displayName.lowercase(Locale.ITALIAN).contains(q) ||
                 c.phoneNumbers.any { it.number.contains(q) || it.normalizedNumber.contains(q) } ||
+                c.emails.any { it.lowercase(Locale.ITALIAN).contains(q) } ||
                 (c.notes?.lowercase(Locale.ITALIAN)?.contains(q) == true) ||
                 (c.organization?.lowercase(Locale.ITALIAN)?.contains(q) == true)
         }
@@ -106,7 +116,21 @@ fun ContactsScreen(
         item {
             BrandedTopHeader(
                 title = "Contatti Google",
-                subtitle = "${contacts.size} contatti con foto e notizie salvate"
+                subtitle = "${contacts.size} contatti • ${favoriteContacts.size} preferiti",
+                trailing = {
+                    IconButton(
+                        onClick = onOpenColorSettings,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("contacts_open_color_settings_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Palette,
+                            contentDescription = "Cambia colore nomi contatti",
+                            tint = ElectricAzure
+                        )
+                    }
+                }
             )
         }
 
@@ -176,26 +200,111 @@ fun ContactsScreen(
             }
         }
 
-        item {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("Cerca per nome, numero, azienda o note…") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (query.isNotEmpty()) {
-                        IconButton(onClick = { query = "" }) {
-                            Icon(Icons.Default.Close, contentDescription = "Pulisci ricerca")
+        // Favorite Contacts Horizontal Carousel
+        if (hasContactsPermission && favoriteContacts.isNotEmpty() && query.isBlank()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Filled.Star,
+                                contentDescription = null,
+                                tint = SuspectAmber,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Contatti Preferiti (${favoriteContacts.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .testTag("contacts_search_input")
-            )
+
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(favoriteContacts, key = { "fav_${it.contactId}" }) { fav ->
+                            FavoriteContactTile(
+                                contact = fav,
+                                nameColor = resolvedNameColor,
+                                onClick = { onOpenContactDetail(fav) },
+                                onCallClick = {
+                                    fav.phoneNumbers.firstOrNull()?.number?.let(onCallNumber)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Search Bar + Filter Chips
+        item {
+            Column(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Cerca per nome, numero, email o note…") },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Pulisci ricerca")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("contacts_search_input")
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = activeFilter == ContactListFilter.ALL,
+                        onClick = { activeFilter = ContactListFilter.ALL },
+                        label = { Text("Tutti (${contacts.size})") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = ElectricAzure,
+                            selectedLabelColor = Color.White
+                        ),
+                        modifier = Modifier.testTag("contacts_filter_all")
+                    )
+                    FilterChip(
+                        selected = activeFilter == ContactListFilter.FAVORITES,
+                        onClick = { activeFilter = ContactListFilter.FAVORITES },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Star,
+                                contentDescription = null,
+                                tint = if (activeFilter == ContactListFilter.FAVORITES) Color.White else SuspectAmber,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        label = { Text("Preferiti (${favoriteContacts.size})") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = ElectricAzure,
+                            selectedLabelColor = Color.White
+                        ),
+                        modifier = Modifier.testTag("contacts_filter_favorites")
+                    )
+                }
+            }
         }
 
         if (!hasContactsPermission) {
@@ -217,7 +326,7 @@ fun ContactsScreen(
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Concedi l'accesso ai Contatti per mostrare i tuoi contatti Google con le foto profilo e tutte le note/notizie salvate.",
+                            text = "Concedi l'accesso ai Contatti per mostrare i tuoi contatti Google con le foto profilo, preferiti e tutte le note salvate.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -248,20 +357,33 @@ fun ContactsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.AccountCircle,
+                            imageVector = if (activeFilter == ContactListFilter.FAVORITES) {
+                                Icons.Outlined.StarBorder
+                            } else {
+                                Icons.Default.AccountCircle
+                            },
                             contentDescription = null,
-                            tint = ElectricAzure,
+                            tint = if (activeFilter == ContactListFilter.FAVORITES) SuspectAmber else ElectricAzure,
                             modifier = Modifier.size(42.dp)
                         )
                         Text(
-                            text = "Nessun contatto trovato",
+                            text = if (activeFilter == ContactListFilter.FAVORITES) {
+                                "Nessun contatto preferito"
+                            } else {
+                                "Nessun contatto trovato"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Tocca Sincronizza per importare i contatti salvati sul tuo account Google.",
+                            text = if (activeFilter == ContactListFilter.FAVORITES) {
+                                "Tocca la stella accanto a un contatto per aggiungerlo subito ai tuoi preferiti."
+                            } else {
+                                "Tocca Sincronizza per importare i contatti salvati sul tuo account Google."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
@@ -270,7 +392,9 @@ fun ContactsScreen(
             items(filtered, key = { it.contactId }) { contact ->
                 ContactRowCard(
                     contact = contact,
-                    onClick = { selectedContact = contact },
+                    nameColor = resolvedNameColor,
+                    onClick = { onOpenContactDetail(contact) },
+                    onToggleFavorite = { onToggleFavorite(contact) },
                     onCallClick = {
                         contact.phoneNumbers.firstOrNull()?.number?.let(onCallNumber)
                     }
@@ -278,26 +402,91 @@ fun ContactsScreen(
             }
         }
     }
+}
 
-    val contactToShow = selectedContact
-    if (contactToShow != null) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
-            onDismissRequest = { selectedContact = null },
-            sheetState = sheetState,
-            containerColor = MaterialTheme.colorScheme.surface
+@Composable
+private fun FavoriteContactTile(
+    contact: DeviceContact,
+    nameColor: Color,
+    onClick: () -> Unit,
+    onCallClick: () -> Unit
+) {
+    val primaryPhone = contact.phoneNumbers.firstOrNull()?.number
+    Surface(
+        modifier = Modifier
+            .width(122.dp)
+            .clickable(onClick = onClick)
+            .testTag("favorite_tile_${contact.contactId}"),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+        tonalElevation = 3.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            ContactFullDetailSheet(
-                contact = contactToShow,
-                onCall = { num ->
-                    selectedContact = null
-                    onCallNumber(num)
-                },
-                onBlock = { num ->
-                    onBlockNumber(num, contactToShow.displayName, "Bloccato da rubrica", 95)
-                    selectedContact = null
+            Box(contentAlignment = Alignment.BottomEnd) {
+                ContactOrCallerAvatar(
+                    name = contact.displayName,
+                    photoUri = contact.photoUri,
+                    size = 64.dp
+                )
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 2.dp
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Star,
+                        contentDescription = "Preferito",
+                        tint = SuspectAmber,
+                        modifier = Modifier
+                            .padding(3.dp)
+                            .size(14.dp)
+                    )
                 }
+            }
+
+            Text(
+                text = contact.displayName,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = nameColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
+
+            if (primaryPhone != null) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = SafeEmerald.copy(alpha = 0.16f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onCallClick)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Call,
+                            contentDescription = "Chiama ${contact.displayName}",
+                            tint = SafeEmerald,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Chiama",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = SafeEmerald
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -305,7 +494,9 @@ fun ContactsScreen(
 @Composable
 private fun ContactRowCard(
     contact: DeviceContact,
+    nameColor: Color,
     onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
     onCallClick: () -> Unit
 ) {
     val primaryNumber = contact.phoneNumbers.firstOrNull()?.number.orEmpty()
@@ -313,7 +504,8 @@ private fun ContactRowCard(
         modifier = Modifier
             .padding(horizontal = 16.dp)
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .testTag("contact_row_${contact.contactId}"),
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
         tonalElevation = 2.dp
@@ -334,6 +526,7 @@ private fun ContactRowCard(
                         text = contact.displayName,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
+                        color = nameColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
@@ -370,6 +563,22 @@ private fun ContactRowCard(
                     )
                 }
             }
+            IconButton(
+                onClick = onToggleFavorite,
+                modifier = Modifier
+                    .size(48.dp)
+                    .testTag("toggle_fav_btn_${contact.contactId}")
+            ) {
+                Icon(
+                    imageVector = if (contact.isStarred) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                    contentDescription = if (contact.isStarred) {
+                        "Rimuovi ${contact.displayName} dai preferiti"
+                    } else {
+                        "Aggiungi ${contact.displayName} ai preferiti"
+                    },
+                    tint = if (contact.isStarred) SuspectAmber else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             if (primaryNumber.isNotBlank()) {
                 IconButton(
                     onClick = onCallClick,
@@ -382,136 +591,6 @@ private fun ContactRowCard(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun ContactFullDetailSheet(
-    contact: DeviceContact,
-    onCall: (String) -> Unit,
-    onBlock: (String) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            ContactOrCallerAvatar(
-                name = contact.displayName,
-                photoUri = contact.photoUri,
-                size = 72.dp
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = contact.displayName,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                if (!contact.organization.isNullOrBlank()) {
-                    Text(
-                        text = contact.organization,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (!contact.googleAccountName.isNullOrBlank()) {
-                    Text(
-                        text = "Sincronizzato: ${contact.googleAccountName}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ElectricAzure
-                    )
-                }
-            }
-        }
-
-        HorizontalDivider()
-
-        contact.phoneNumbers.forEach { phone ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(phone.number, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(phone.typeLabel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { onBlock(phone.number) }) {
-                        Icon(Icons.Default.Block, contentDescription = "Blocca", tint = SpamCrimson, modifier = Modifier.size(18.dp))
-                    }
-                    Button(
-                        onClick = { onCall(phone.number) },
-                        colors = ButtonDefaults.buttonColors(containerColor = SafeEmerald)
-                    ) {
-                        Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Chiama")
-                    }
-                }
-            }
-        }
-
-        if (contact.emails.isNotEmpty()) {
-            DetailInfoRow(Icons.Default.Email, "Email", contact.emails.joinToString("\n"))
-        }
-        if (!contact.organization.isNullOrBlank()) {
-            DetailInfoRow(Icons.Default.Business, "Azienda / Ruolo", contact.organization)
-        }
-        if (!contact.address.isNullOrBlank()) {
-            DetailInfoRow(Icons.Default.LocationOn, "Indirizzo", contact.address)
-        }
-        if (!contact.website.isNullOrBlank()) {
-            DetailInfoRow(Icons.Default.Language, "Sito Web", contact.website)
-        }
-        if (!contact.birthdayOrEvent.isNullOrBlank()) {
-            DetailInfoRow(Icons.Default.Event, "Ricorrenza", contact.birthdayOrEvent)
-        }
-        if (!contact.notes.isNullOrBlank()) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = ElectricAzure.copy(alpha = 0.10f),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
-                    Icon(Icons.Default.Notes, contentDescription = "Notizie salvate", tint = ElectricAzure)
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = "Notizie e Note Salvate",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = ElectricAzure
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = contact.notes,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-            }
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-    }
-}
-
-@Composable
-private fun DetailInfoRow(icon: ImageVector, label: String, value: String) {
-    Row(verticalAlignment = Alignment.Top) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(modifier = Modifier.width(10.dp))
-        Column {
-            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

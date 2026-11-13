@@ -77,6 +77,7 @@ import com.example.data.remote.SpamVerdict
 import com.example.ui.CallFilter
 import com.example.ui.LookupUiState
 import com.example.ui.components.BrandedTopHeader
+import com.example.ui.components.ContactColorPalette
 import com.example.ui.components.ContactOrCallerAvatar
 import com.example.ui.components.SpamVerdictBadge
 import com.example.ui.theme.ElectricAzure
@@ -98,6 +99,7 @@ fun CallsScreen(
     lookupState: LookupUiState,
     roleStatus: SystemRoleStatus,
     hasCallLogPermission: Boolean,
+    contactNameColorArgb: Long = 0L,
     onRequestPermissions: () -> Unit,
     onFilterSelected: (CallFilter) -> Unit,
     onSearchOnline: (String) -> Unit,
@@ -110,6 +112,10 @@ fun CallsScreen(
     val gradients = LocalSpamcallerGradients.current
     var searchQuery by remember { mutableStateOf("") }
     var showDialerSheet by remember { mutableStateOf(false) }
+    val resolvedContactColor = ContactColorPalette.resolveNameColor(
+        argb = contactNameColorArgb,
+        defaultColor = MaterialTheme.colorScheme.onSurface
+    )
 
     val filteredCalls = remember(recentCalls, callFilter, searchQuery) {
         recentCalls.filter { item ->
@@ -422,6 +428,7 @@ fun CallsScreen(
                 items(filteredCalls, key = { it.id }) { callItem ->
                     CallLogRowCard(
                         item = callItem,
+                        contactNameColor = resolvedContactColor,
                         onCallClick = { onPlaceCall(callItem.number) },
                         onInspectOnline = { onSearchOnline(callItem.number) },
                         onBlockClick = {
@@ -466,6 +473,7 @@ fun CallsScreen(
         ) {
             TruecallerDialerPad(
                 contacts = contacts,
+                contactNameColor = resolvedContactColor,
                 onCallNumber = { num ->
                     showDialerSheet = false
                     onPlaceCall(num)
@@ -483,6 +491,7 @@ fun CallsScreen(
 @Composable
 private fun CallLogRowCard(
     item: DeviceCallLogItem,
+    contactNameColor: Color,
     onCallClick: () -> Unit,
     onInspectOnline: () -> Unit,
     onBlockClick: () -> Unit
@@ -528,6 +537,7 @@ private fun CallLogRowCard(
                     text = item.displayName,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
+                    color = if (isSpam) SpamCrimson else contactNameColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -707,6 +717,7 @@ private fun OnlineReportCard(
 @Composable
 private fun TruecallerDialerPad(
     contacts: List<DeviceContact>,
+    contactNameColor: Color,
     onCallNumber: (String) -> Unit,
     onCheckOnline: (String) -> Unit
 ) {
@@ -750,7 +761,7 @@ private fun TruecallerDialerPad(
                     ContactOrCallerAvatar(contact.displayName, contact.photoUri, size = 36.dp)
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(contact.displayName, fontWeight = FontWeight.SemiBold)
+                        Text(contact.displayName, fontWeight = FontWeight.SemiBold, color = contactNameColor)
                         Text(firstPhone, style = MaterialTheme.typography.bodyMedium)
                     }
                     Icon(Icons.Default.Call, contentDescription = "Chiama", tint = ElectricAzure)

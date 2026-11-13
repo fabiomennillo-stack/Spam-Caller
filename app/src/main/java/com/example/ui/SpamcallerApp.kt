@@ -43,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -51,14 +52,17 @@ import androidx.core.content.ContextCompat
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.example.auth.GoogleAuthHelper
 import com.example.data.device.SystemRoleHelper
 import com.example.ui.screens.BackupSystemScreen
 import com.example.ui.screens.CallsScreen
+import com.example.ui.screens.ContactDetailScreen
 import com.example.ui.screens.ContactsScreen
 import com.example.ui.screens.ProtectionScreen
 import com.example.ui.theme.ElectricAzure
@@ -78,8 +82,10 @@ private enum class SpamcallerTab(
     CALLS("calls", "Chiamate", Icons.Filled.Call, Icons.Outlined.Call),
     CONTACTS("contacts", "Contatti", Icons.Filled.Contacts, Icons.Outlined.Contacts),
     PROTECTION("protection", "Protezione", Icons.Filled.Shield, Icons.Outlined.Shield),
-    BACKUP("backup", "Backup", Icons.Filled.Save, Icons.Outlined.Save)
+    BACKUP("backup", "Impostazioni", Icons.Filled.Save, Icons.Outlined.Save)
 }
+
+private const val ROUTE_CONTACT_DETAIL = "contact_detail/{contactId}"
 
 @Composable
 fun SpamcallerApp(
@@ -97,6 +103,7 @@ fun SpamcallerApp(
     )
 
     val contacts by viewModel.contacts.collectAsStateWithLifecycle()
+    val favoriteContacts by viewModel.favoriteContacts.collectAsStateWithLifecycle()
     val googleAccounts by viewModel.googleAccounts.collectAsStateWithLifecycle()
     val recentCalls by viewModel.recentCalls.collectAsStateWithLifecycle()
     val callFilter by viewModel.callFilter.collectAsStateWithLifecycle()
@@ -127,6 +134,7 @@ fun SpamcallerApp(
     val permissionsToRequest = remember {
         buildList {
             add(Manifest.permission.READ_CONTACTS)
+            add(Manifest.permission.WRITE_CONTACTS)
             add(Manifest.permission.READ_CALL_LOG)
             add(Manifest.permission.CALL_PHONE)
             add(Manifest.permission.READ_PHONE_STATE)
@@ -194,6 +202,7 @@ fun SpamcallerApp(
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: SpamcallerTab.CALLS.route
+    val isDetailRoute = currentRoute.startsWith("contact_detail")
 
     BoxWithConstraints(
         modifier = Modifier
@@ -203,11 +212,11 @@ fun SpamcallerApp(
         val useRail = maxWidth >= 600.dp
 
         Scaffold(
-            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+            containerColor = Color.Transparent,
             contentWindowInsets = WindowInsets.safeDrawing,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
-                if (!useRail) {
+                if (!useRail && !isDetailRoute) {
                     NavigationBar(
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
                         windowInsets = WindowInsets.navigationBars
@@ -247,7 +256,7 @@ fun SpamcallerApp(
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                if (useRail) {
+                if (useRail && !isDetailRoute) {
                     NavigationRail(
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
                         modifier = Modifier.fillMaxHeight()
@@ -289,6 +298,7 @@ fun SpamcallerApp(
                                 lookupState = lookupState,
                                 roleStatus = roleStatus,
                                 hasCallLogPermission = hasCallLogPerm,
+                                contactNameColorArgb = preferences.contactNameColorArgb,
                                 onRequestPermissions = { permissionLauncher.launch(permissionsToRequest) },
                                 onFilterSelected = viewModel::setCallFilter,
                                 onSearchOnline = { num -> viewModel.lookupOnlineNumber(num) },
@@ -306,19 +316,88 @@ fun SpamcallerApp(
                         composable(SpamcallerTab.CONTACTS.route) {
                             ContactsScreen(
                                 contacts = contacts,
+                                favoriteContacts = favoriteContacts,
                                 googleAccounts = googleAccounts,
                                 lastSyncMillis = preferences.lastContactsSyncMillis,
                                 isSyncing = isSyncing,
                                 hasContactsPermission = hasContactsPerm,
+                                contactNameColorArgb = preferences.contactNameColorArgb,
                                 onRequestPermissions = { permissionLauncher.launch(permissionsToRequest) },
                                 onSyncGoogleContacts = {
                                     viewModel.syncGoogleContactsNow(hasContactsPerm, hasCallLogPerm)
                                 },
+                                onOpenContactDetail = { contact ->
+                                    navController.navigate("contact_detail/${contact.contactId}")
+                                },
+                                onToggleFavorite = viewModel::toggleFavoriteContact,
                                 onCallNumber = { num -> SystemRoleHelper.placePhoneCall(context, num) },
-                                onBlockNumber = { num, name, reason, score ->
-                                    viewModel.blockNumber(num, name, reason, "Contatti", score)
+                                onOpenColorSettings = {
+                                    navController.navigate(SpamcallerTab.BACKUP.route) {
+                                        popUpTo(SpamcallerTab.CALLS.route) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
                                 }
                             )
+                        }
+
+                        composable(
+                            route = ROUTE_CONTACT_DETAIL,
+                            arguments = listOf(
+                                navArgument("contactId") { type = NavType.LongType }
+                            )
+                        ) { entry ->
+                            val contactId = entry.arguments?.getLong("contactId") ?: -1L
+                            val contact = contacts.firstOrNull { it.contactId == contactId }
+                            if (contact == null) {
+                                LaunchedEffect(contactId) {
+                                    navController.popBackStack()
+                                }
+                            } else {
+                                ContactDetailScreen(
+                                    contact = contact,
+                                    contactNameColorArgb = preferences.contactNameColorArgb,
+                                    onBack = { navController.popBackStack() },
+                                    onToggleFavorite = viewModel::toggleFavoriteContact,
+                                    onCallPhone = { num ->
+                                        SystemRoleHelper.placePhoneCall(context, num)
+                                    },
+                                    onCallWhatsApp = { num, waCallId ->
+                                        if (!SystemRoleHelper.openWhatsAppCall(context, num, waCallId)) {
+                                            viewModel.showStatusMessage("WhatsApp non trovato sul dispositivo.")
+                                        }
+                                    },
+                                    onChatWhatsApp = { num, waProfileId ->
+                                        if (!SystemRoleHelper.openWhatsAppChat(context, num, waProfileId)) {
+                                            viewModel.showStatusMessage("WhatsApp non trovato sul dispositivo.")
+                                        }
+                                    },
+                                    onSendEmail = { email ->
+                                        if (!SystemRoleHelper.sendEmailToContact(context, email)) {
+                                            viewModel.showStatusMessage("Nessuna app Email disponibile sul dispositivo.")
+                                        }
+                                    },
+                                    onOpenMap = { address ->
+                                        if (!SystemRoleHelper.openMapAddress(context, address)) {
+                                            viewModel.showStatusMessage("Nessuna app Mappe disponibile.")
+                                        }
+                                    },
+                                    onOpenWebsite = { url ->
+                                        if (!SystemRoleHelper.openWebsiteUrl(context, url)) {
+                                            viewModel.showStatusMessage("Impossibile aprire il link web.")
+                                        }
+                                    },
+                                    onEditInContacts = { c ->
+                                        if (!SystemRoleHelper.openSystemContactEditor(context, c.contactId, c.lookupKey)) {
+                                            viewModel.showStatusMessage("Impossibile aprire l'editor Contatti di sistema.")
+                                        }
+                                    },
+                                    onBlockNumber = { num, name ->
+                                        viewModel.blockNumber(num, name, "Bloccato da rubrica", "Contatti", 95)
+                                    },
+                                    onShowMessage = viewModel::showStatusMessage
+                                )
+                            }
                         }
 
                         composable(SpamcallerTab.PROTECTION.route) {
@@ -351,6 +430,8 @@ fun SpamcallerApp(
                                 cloudProfile = cloudProfile,
                                 roleStatus = roleStatus,
                                 backupRecords = backupRecords,
+                                contactNameColorArgb = preferences.contactNameColorArgb,
+                                onUpdateContactNameColor = viewModel::updateContactNameColor,
                                 onRequestDefaultDialerRole = {
                                     SystemRoleHelper.createDefaultDialerIntent(context)
                                         ?.let { roleLauncher.launch(it) }

@@ -36,6 +36,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -94,8 +96,28 @@ class MainViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
 
-    private val _contacts = MutableStateFlow<List<DeviceContact>>(emptyList())
-    val contacts: StateFlow<List<DeviceContact>> = _contacts.asStateFlow()
+    private val _rawContacts = MutableStateFlow<List<DeviceContact>>(emptyList())
+    val contacts: StateFlow<List<DeviceContact>> = combine(
+        _rawContacts,
+        screeningPreferences
+    ) { rawList, prefs ->
+        if (prefs.favoriteOverrides.isEmpty()) {
+            rawList
+        } else {
+            rawList.map { c ->
+                val override = prefs.favoriteOverrides[c.contactId]
+                if (override != null && override != c.isStarred) {
+                    c.copy(isStarred = override)
+                } else {
+                    c
+                }
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val favoriteContacts: StateFlow<List<DeviceContact>> = contacts
+        .map { list -> list.filter { it.isStarred } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     private val _googleAccounts = MutableStateFlow<List<String>>(emptyList())
     val googleAccounts: StateFlow<List<String>> = _googleAccounts.asStateFlow()
@@ -137,6 +159,10 @@ class MainViewModel(
         _statusMessage.value = null
     }
 
+    fun showStatusMessage(message: String) {
+        _statusMessage.value = message
+    }
+
     fun refreshRoleStatus() {
         _roleStatus.value = SystemRoleHelper.getRoleStatus(appContext)
     }
@@ -153,12 +179,48 @@ class MainViewModel(
             } else {
                 emptyList()
             }
-            _contacts.value = loadedContacts
+            _rawContacts.value = loadedContacts
 
             if (hasCallLogPerm) {
-                _recentCalls.value = callLogRepo.loadRecentCalls(loadedContacts)
+                val overrides = prefsRepo.getPreferencesOnce().favoriteOverrides
+                val effectiveContacts = loadedContacts.map { c ->
+                    val ov = overrides[c.contactId]
+                    if (ov != null) c.copy(isStarred = ov) else c
+                }
+                _recentCalls.value = callLogRepo.loadRecentCalls(effectiveContacts)
             } else {
                 _recentCalls.value = emptyList()
+            }
+        }
+    }
+
+    fun toggleFavoriteContact(contact: DeviceContact) {
+        viewModelScope.launch {
+            val newFavoriteState = !contact.isStarred
+            prefsRepo.setFavoriteOverride(contact.contactId, newFavoriteState)
+            val syncedToDevice = contactsRepo.setSystemContactStarred(contact.contactId, newFavoriteState)
+            _rawContacts.value = _rawContacts.value.map {
+                if (it.contactId == contact.contactId) it.copy(isStarred = newFavoriteState) else it
+            }
+            _statusMessage.value = if (newFavoriteState) {
+                if (syncedToDevice) {
+                    "${contact.displayName} aggiunto ai preferiti (sincronizzato con Google)."
+                } else {
+                    "${contact.displayName} aggiunto ai preferiti."
+                }
+            } else {
+                "${contact.displayName} rimosso dai preferiti."
+            }
+        }
+    }
+
+    fun updateContactNameColor(argb: Long) {
+        viewModelScope.launch {
+            prefsRepo.saveContactNameColor(argb)
+            _statusMessage.value = if (argb == 0L) {
+                "Colore nomi contatti reimpostato su Automatico."
+            } else {
+                "Colore nomi contatti aggiornato."
             }
         }
     }
@@ -303,7 +365,9 @@ class MainViewModel(
                 backupManager.saveBackupOnPhone(
                     autoBlockEnabled = prefs.autoBlockEnabled,
                     spamThreshold = prefs.spamThreshold,
-                    blockHiddenNumbers = prefs.blockHiddenNumbers
+                    blockHiddenNumbers = prefs.blockHiddenNumbers,
+                    contactNameColorArgb = prefs.contactNameColorArgb,
+                    favoriteOverrides = prefs.favoriteOverrides
                 )
             }.onSuccess { summary ->
                 prefsRepo.saveLastBackupLabel(summary.fileName)
@@ -329,7 +393,9 @@ class MainViewModel(
                     uri = uri,
                     autoBlockEnabled = prefs.autoBlockEnabled,
                     spamThreshold = prefs.spamThreshold,
-                    blockHiddenNumbers = prefs.blockHiddenNumbers
+                    blockHiddenNumbers = prefs.blockHiddenNumbers,
+                    contactNameColorArgb = prefs.contactNameColorArgb,
+                    favoriteOverrides = prefs.favoriteOverrides
                 )
             }.onSuccess { summary ->
                 prefsRepo.saveLastBackupLabel(summary.fileName)
@@ -347,7 +413,15 @@ class MainViewModel(
                 backupManager.restoreFromLocalFile(record.filePath)
             }.onSuccess { (summary, settings) ->
                 if (settings != null) {
-                    prefsRepo.saveScreeningSettings(settings.first, settings.second, settings.third)
+                    prefsRepo.saveScreeningSettings(
+                        settings.autoBlockEnabled,
+                        settings.spamThreshold,
+                        settings.blockHiddenNumbers
+                    )
+                    settings.contactNameColorArgb?.let { prefsRepo.saveContactNameColor(it) }
+                    if (settings.favoriteOverrides.isNotEmpty()) {
+                        prefsRepo.restoreFavoriteOverrides(settings.favoriteOverrides)
+                    }
                 }
                 _statusMessage.value =
                     "Ripristinati ${summary.blockedRestored} numeri, ${summary.sourcesRestored} nuovi siti e ${summary.cacheRestored} schede spam."
@@ -363,7 +437,15 @@ class MainViewModel(
                 backupManager.restoreFromUri(uri)
             }.onSuccess { (summary, settings) ->
                 if (settings != null) {
-                    prefsRepo.saveScreeningSettings(settings.first, settings.second, settings.third)
+                    prefsRepo.saveScreeningSettings(
+                        settings.autoBlockEnabled,
+                        settings.spamThreshold,
+                        settings.blockHiddenNumbers
+                    )
+                    settings.contactNameColorArgb?.let { prefsRepo.saveContactNameColor(it) }
+                    if (settings.favoriteOverrides.isNotEmpty()) {
+                        prefsRepo.restoreFavoriteOverrides(settings.favoriteOverrides)
+                    }
                 }
                 _statusMessage.value =
                     "Ripristino completato dal file: ${summary.blockedRestored} numeri e ${summary.sourcesRestored} siti."
