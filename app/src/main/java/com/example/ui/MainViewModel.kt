@@ -57,7 +57,7 @@ class MainViewModel(
     private val currentUserId: String,
     private val db: SpamcallerDatabase,
     private val prefsRepo: UserPreferencesRepository,
-    private val userProfileRepo: UserProfileRepository,
+    private val userProfileRepo: UserProfileRepository?,
     private val lookupService: OnlineSpamLookupService,
     private val contactsRepo: GoogleContactsRepository,
     private val callLogRepo: DeviceCallLogRepository,
@@ -82,7 +82,8 @@ class MainViewModel(
     val screeningPreferences: StateFlow<ScreeningPreferences> = prefsRepo.preferencesFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), ScreeningPreferences())
 
-    val cloudProfile: StateFlow<UserProfile?> = userProfileRepo.observeProfile(currentUserId)
+    val cloudProfile: StateFlow<UserProfile?> = (userProfileRepo?.observeProfile(currentUserId)
+        ?: kotlinx.coroutines.flow.flowOf(null))
         .catch { error ->
             val firestoreError = generateSequence(error) { it.cause }
                 .filterIsInstance<FirebaseFirestoreException>()
@@ -120,12 +121,14 @@ class MainViewModel(
     init {
         viewModelScope.launch {
             lookupService.ensureDefaultSourcesSeeded()
-            val user = Firebase.auth.currentUser
-            userProfileRepo.ensureProfileInitialized(
-                displayName = user?.displayName ?: "Utente Spamcaller",
-                email = user?.email.orEmpty(),
-                photoUrl = user?.photoUrl?.toString().orEmpty()
-            )
+            if (userProfileRepo != null && com.google.firebase.FirebaseApp.getApps(appContext).isNotEmpty()) {
+                val user = Firebase.auth.currentUser
+                userProfileRepo.ensureProfileInitialized(
+                    displayName = user?.displayName ?: "Utente Spamcaller",
+                    email = user?.email.orEmpty(),
+                    photoUrl = user?.photoUrl?.toString().orEmpty()
+                )
+            }
         }
         refreshRoleStatus()
     }
@@ -289,7 +292,7 @@ class MainViewModel(
     ) {
         viewModelScope.launch {
             prefsRepo.saveScreeningSettings(autoBlockEnabled, spamThreshold, blockHiddenNumbers)
-            userProfileRepo.updateSettings(autoBlockEnabled, spamThreshold, blockHiddenNumbers)
+            userProfileRepo?.updateSettings(autoBlockEnabled, spamThreshold, blockHiddenNumbers)
         }
     }
 
@@ -304,7 +307,7 @@ class MainViewModel(
                 )
             }.onSuccess { summary ->
                 prefsRepo.saveLastBackupLabel(summary.fileName)
-                userProfileRepo.updateSettings(
+                userProfileRepo?.updateSettings(
                     prefs.autoBlockEnabled,
                     prefs.spamThreshold,
                     prefs.blockHiddenNumbers,
@@ -392,14 +395,18 @@ class MainViewModel(
                     ) as Application
                     val db = SpamcallerDatabase.getInstance(app)
                     val dao = db.spamcallerDao()
-                    val databaseId = app.getString(R.string.firestore_database_id)
-                    val firestore = FirebaseFirestore.getInstance(databaseId)
+                    val repo = if (com.google.firebase.FirebaseApp.getApps(app).isNotEmpty()) {
+                        val databaseId = app.getString(R.string.firestore_database_id)
+                        UserProfileRepository(FirebaseFirestore.getInstance(databaseId))
+                    } else {
+                        null
+                    }
                     return MainViewModel(
                         appContext = app.applicationContext,
                         currentUserId = currentUserId,
                         db = db,
                         prefsRepo = UserPreferencesRepository(app),
-                        userProfileRepo = UserProfileRepository(firestore),
+                        userProfileRepo = repo,
                         lookupService = OnlineSpamLookupService(dao),
                         contactsRepo = GoogleContactsRepository(app),
                         callLogRepo = DeviceCallLogRepository(app, dao),

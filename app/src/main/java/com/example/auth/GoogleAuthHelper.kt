@@ -44,6 +44,10 @@ object GoogleAuthHelper {
         onUnauthenticated: () -> Unit,
         scope: CoroutineScope
     ) {
+        if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
+            onUnauthenticated()
+            return
+        }
         if (Firebase.auth.currentUser != null) {
             onAuthSuccess()
             return
@@ -51,6 +55,10 @@ object GoogleAuthHelper {
         val clientId = try {
             context.getString(R.string.default_web_client_id)
         } catch (_: Exception) {
+            onUnauthenticated()
+            return
+        }
+        if (clientId == "PLACEHOLDER_WEB_CLIENT_ID" || clientId.isBlank()) {
             onUnauthenticated()
             return
         }
@@ -93,10 +101,18 @@ object GoogleAuthHelper {
         scope: CoroutineScope,
         onAuthCancelled: () -> Unit = {}
     ) {
+        if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) {
+            onAuthError("File google-services.json non presente in questa build. Aggiungi google-services.json per abilitare l'accesso Google.")
+            return
+        }
         val clientId = try {
             context.getString(R.string.default_web_client_id)
         } catch (_: Exception) {
             onAuthError("Configurazione Google Sign-In mancante (default_web_client_id).")
+            return
+        }
+        if (clientId == "PLACEHOLDER_WEB_CLIENT_ID" || clientId.isBlank()) {
+            onAuthError("Valore segnaposto rilevato: aggiungi google-services.json per completare l'accesso Google.")
             return
         }
 
@@ -142,7 +158,7 @@ object GoogleAuthHelper {
                 } catch (e: Exception) {
                     Log.w("Auth", "Failed to clear credential state: ${e.message}")
                 } finally {
-                    Firebase.auth.signOut()
+                    runCatching { Firebase.auth.signOut() }
                     onSignOutComplete()
                 }
             }

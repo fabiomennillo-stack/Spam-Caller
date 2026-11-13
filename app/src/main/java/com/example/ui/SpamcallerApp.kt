@@ -343,8 +343,11 @@ fun SpamcallerApp(
                         }
 
                         composable(SpamcallerTab.BACKUP.route) {
+                            val currentFirebaseUser = if (com.google.firebase.FirebaseApp.getApps(context).isNotEmpty()) {
+                                Firebase.auth.currentUser
+                            } else null
                             BackupSystemScreen(
-                                firebaseUser = Firebase.auth.currentUser,
+                                firebaseUser = currentFirebaseUser,
                                 cloudProfile = cloudProfile,
                                 roleStatus = roleStatus,
                                 backupRecords = backupRecords,
