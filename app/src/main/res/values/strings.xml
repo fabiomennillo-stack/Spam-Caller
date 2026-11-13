@@ -1,0 +1,19 @@
+<resources>
+    <string name="app_name">Spamcaller</string>
+    <string name="app_tagline">ID Chiamante, Anti-Spam Online &amp; Telefono</string>
+    <string name="nav_calls">Chiamate</string>
+    <string name="nav_contacts">Contatti</string>
+    <string name="nav_protection">Protezione</string>
+    <string name="nav_backup">Backup</string>
+    <string name="sign_in_google">Accedi con Google</string>
+    <string name="sign_out">Disconnetti</string>
+    <string name="search_hint">Cerca numero, contatto o siti spam…</string>
+    <string name="default_dialer_title">App Telefono di Sistema</string>
+    <string name="call_screening_title">App ID Chiamante e Spam</string>
+    <string name="backup_create_now">Salva Backup sul Telefono</string>
+    <string name="backup_export_saf">Esporta File JSON su Memoria</string>
+    <string name="backup_import_saf">Ripristina File da Telefono</string>
+    <string name="sync_google_contacts">Sincronizza Contatti Google</string>
+    <string name="incoming_call_channel_name">Chiamate in arrivo</string>
+    <string name="spam_alert_channel_name">Avvisi Spamcaller</string>
+</resources>

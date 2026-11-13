@@ -1,0 +1,6 @@
+{
+  "name": "Spamcaller",
+  "description": "Truecaller-style caller ID, dialer, call screening, Google Contacts sync, online spam lookup (Tellows, ChiMiChiama, SegnalazioniNumeri, custom sites), and local phone backups.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

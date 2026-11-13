@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated Google user profile and Spamcaller protection preferences.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the signed-in Google user."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name from Google account."
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address from Google account."
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "Profile photo URL from Google account."
+        },
+        "autoBlockEnabled": {
+          "type": "boolean",
+          "description": "Whether incoming high-risk spam calls are automatically rejected."
+        },
+        "spamThreshold": {
+          "type": "integer",
+          "description": "Minimum spam risk score (0-100) required to auto-block."
+        },
+        "blockHiddenNumbers": {
+          "type": "boolean",
+          "description": "Whether private/unknown caller ID numbers are blocked."
+        },
+        "lastPhoneBackupLabel": {
+          "type": "string",
+          "description": "Human-readable label of the most recent local backup saved on the phone."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set on profile creation via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp updated via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "autoBlockEnabled",
+        "spamThreshold",
+        "blockHiddenNumbers",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Private Spamcaller profile and call-screening configuration owned by userId."
+    }
+  }
+}
